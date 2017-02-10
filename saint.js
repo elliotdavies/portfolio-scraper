@@ -1,5 +1,6 @@
 const fetch = require('node-fetch');
 const cheerio = require('cheerio');
+const fs = require('fs');
 
 const authorPageBase = `http://thesaint-online.com/author/elliot-davies`;
 
@@ -17,11 +18,22 @@ const getAuthorPageLinks = ($) => {
 const fetchAllAsText = urls =>
   Promise
     .all(urls.map(url => fetch(url)))
-    .then(results => Promise.all(results.map(r => r.text())));
+
+    // For each URL, return a promise containing the URL and body text
+    .then(results => {
+
+      const textPromises = results.map(result =>
+        result
+          .text()
+          .then(text => ({ url: result.url, text }))
+      );
+
+      return Promise.all(textPromises);
+    });
 
 
 // Parse the HTML for a single author page and retrieve the article links
-const parseArticleLinks = ($) => {
+const parseArticleLinks = (url, $) => {
   const articleUrls = [];
 
   const links = $('.td-main-content-wrap h3.entry-title a');
@@ -35,55 +47,128 @@ const parseArticleLinks = ($) => {
 
 
 // Given an array of res.text()s for author pages, parse them all for article links
-const parseArticleLinksFromTexts = texts => texts.map(t => parseArticleLinks(cheerio.load(t)));
+const parseArticleLinksFromTexts = texts => texts.map(({text, url}) => parseArticleLinks(url, cheerio.load(text)));
 
 
 // Parse the HTML for a single article page and retrieve the article content
-const parseArticleContent = ($) => {
-  const articleContent = {
-    headline: '',
-    byline: '',
-    date: '',
-    section: '',
-    images: [],
-    url: '',
-    copy: [],
-    tags: [],
-    likes: 0,
-    shares: 0,
-    comments: []
+const parseArticleContent = (url, $) => {
+
+  // Headline
+  const headline = $('header.td-post-title h1.entry-title').text();
+  
+  // Bylines (may be multiple)
+  const bylines = []
+  $('.td-post-author-name a').each((i, a) => bylines.push($(a).text()));
+  
+  // Publish date
+  const date = $('header.td-post-title .td-post-date time').text();
+
+  // Categories / sections
+  const categories = [];
+  $('ul.td-category li a').each((i, a) => categories.push($(a).text()));
+
+  // Featured image (normally present), and possibly other images from article body
+  const images = [];
+  const featuredImage = $('.td-post-featured-image img').attr('src');
+  const bodyImages = $('.td-post-content img').attr('src');
+  if (featuredImage) images.push(featuredImage);
+  if (bodyImages) images.push(bodyImages);
+
+  // Article URL
+  // const url = $('link[rel="canonical"]').attr('href');
+
+  // Article body as HTML
+  const copy = $('.td-post-content').html();
+
+  // Tags
+  const tags = [];
+  $('ul.td-tags li a').each((i, a) => tags.push($(a).text()));
+
+  // Comments (author name and text)
+  const comments = [];
+  $('li.comment article').each((i, c) => {
+    const author = $(c).find('footer cite').text();
+    const content = $(c).find('.comment-content').html();
+    comments.push({ author, content });
+  });
+
+  return {
+    headline,
+    bylines,
+    date,
+    categories,
+    images,
+    url,
+    copy,
+    tags,
+    comments,
   };
-
-  // DOM parsing here
-
-  return articleContent;
 };
 
 
 // Given an array of res.text()s for article pages, parse them all for the article content
-const parseArticleContentFromTexts = texts => texts.map(t => parseArticleContent(cheerio.load(t)));
+const parseArticleContentFromTexts = texts => texts.map(({text, url}) => parseArticleContent(url, cheerio.load(text)));
 
 
 // Flatten nested arrays
 const flatten = arrs => [].concat(...arrs);
 
 
-// Helper function
+// Write to JSON files
+const writeFiles = articles => {
+  articles.forEach(a =>
+    fs.writeFile(`./data/${slugify(a.headline)}.json`, JSON.stringify(a), err => {
+      if (err) console.log(err);
+    })
+  );
+
+  return articles;
+};
+
+
+const filterErrors = articles =>
+  articles
+    .filter(a => a.headline === '')
+    .map(a => a.url);
+
+
+// Helper functions
 const log = x => {
   console.log(x);
   return x;
 };
 
 
+// Slugify some text
+const slugify = text =>
+  text
+    .toString()
+    .toLowerCase()
+    .replace(/\s+/g, '-') // Replace spaces with -
+    .replace(/[^\w\-]+/g, '') // Remove all non-word chars
+    .replace(/\-\-+/g, '-') // Replace multiple - with single -
+    .replace(/^-+/, '') // Trim - from start of text
+    .replace(/-+$/, ''); // Trim - from end of text
+
+
 fetch(authorPageBase)
   .then(res => res.text())
   .then(text => cheerio.load(text))
   .then(getAuthorPageLinks)
+  // .then(links => [links[0]]) // tmp
   .then(fetchAllAsText)
   .then(parseArticleLinksFromTexts)
   .then(flatten)
+  // // .then(links => [links[1]]) // tmp
   .then(fetchAllAsText)
   .then(parseArticleContentFromTexts)
+  .then(writeFiles)
+  .then(filterErrors)
+  .then(log)
+  .then(fetchAllAsText)
+  .then(parseArticleContentFromTexts)
+  .then(writeFiles)
+  .then(filterErrors)
   .then(log)
   .catch(err => {
     console.log('Err:', err);
