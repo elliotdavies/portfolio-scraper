@@ -1,4 +1,4 @@
-const authorPageBase = `http://www.thesaint-online.com/author/rachael-miller`;
+const authorPageBase = `http://www.thesaint-online.com/author/elliot-davies`;
 
 
 /**
