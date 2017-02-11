@@ -2,7 +2,8 @@ const fetch = require('node-fetch');
 const cheerio = require('cheerio');
 const fs = require('fs');
 
-const authorPageBase = `http://thesaint-online.com/author/elliot-davies`;
+// const authorPageBase = `http://thesaint-online.com/author/elliot-davies`;
+const authorPageBase = `http://www.thesaint-online.com/author/laura-abernethy`;
 
 
 // Parse the HTML for a single author page and retrieve the author page links
@@ -116,23 +117,26 @@ const flatten = arrs => [].concat(...arrs);
 
 // Write to JSON files
 const writeFiles = articles => {
-  articles.forEach(a =>
-    fs.writeFile(`./data/${slugify(a.headline)}.json`, JSON.stringify(a), err => {
-      if (err) console.log(err);
-    })
-  );
+  articles
+    .filter(a => a.headline !== '')
+    .forEach(a =>
+      fs.writeFile(`./data/${slugify(a.headline)}.json`, JSON.stringify(a), err => {
+        if (err) console.log(err);
+      })
+    );
 
   return articles;
 };
 
 
-const filterErrors = articles =>
+// Return URLs only for pages that didn't parse
+const filterFailures = articles =>
   articles
     .filter(a => a.headline === '')
     .map(a => a.url);
 
 
-// Helper functions
+// Helper
 const log = x => {
   console.log(x);
   return x;
@@ -151,25 +155,41 @@ const slugify = text =>
     .replace(/-+$/, ''); // Trim - from end of text
 
 
+// Fetch and parse article URLs, and retry failures
+const fetchArticlesRecursively = urls => {
+
+  if (urls.length === 0) {
+    console.log('All done');
+    return;
+  }
+
+  console.log(`${urls.length} pages remaining`);
+
+  fetchAllAsText(urls)
+    .then(parseArticleContentFromTexts)
+    .then(writeFiles)
+    .then(filterFailures)
+    .then(fetchArticlesRecursively)
+    .catch(err => {
+      console.log('Err while fetching:', err);
+      // Retry on error
+      fetchArticlesRecursively(urls);
+    });
+}
+
+
+// First fetch the initial author page and parse it
 fetch(authorPageBase)
   .then(res => res.text())
   .then(text => cheerio.load(text))
+  // Fetch every author page (because of pagination)
   .then(getAuthorPageLinks)
-  // .then(links => [links[0]]) // tmp
   .then(fetchAllAsText)
+  // Get links to all the article pages
   .then(parseArticleLinksFromTexts)
   .then(flatten)
-  // // .then(links => [links[1]]) // tmp
-  .then(fetchAllAsText)
-  .then(parseArticleContentFromTexts)
-  .then(writeFiles)
-  .then(filterErrors)
-  .then(log)
-  .then(fetchAllAsText)
-  .then(parseArticleContentFromTexts)
-  .then(writeFiles)
-  .then(filterErrors)
-  .then(log)
+  // Fetch and parse the articles
+  .then(fetchArticlesRecursively)
   .catch(err => {
     console.log('Err:', err);
   });
